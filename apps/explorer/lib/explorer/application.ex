@@ -32,6 +32,7 @@ defmodule Explorer.Application do
 
   alias Explorer.Chain.Cache.AddressTags, as: AddressTagsCache
   alias Explorer.Chain.Cache.ContractMethods, as: ContractMethodsCache
+  alias Explorer.Chain.GNS
   alias Explorer.Chain.Optimism.InteropMessage, as: OptimismInteropMessage
   alias Explorer.Chain.Supply.RSK
 
@@ -152,6 +153,13 @@ defmodule Explorer.Application do
         # so the `[]` returned outside API mode is dropped rather than passed
         # to the supervisor
         AddressTagsCache.cache_name()
+        |> con_cache_child_spec(
+          ttl_check_interval: :timer.minutes(1),
+          global_ttl: :infinity
+        )
+        |> only_in_mode(:api),
+        # answers of the GNS contract are requested and cached by the API only
+        GNS.cache_name()
         |> con_cache_child_spec(
           ttl_check_interval: :timer.minutes(1),
           global_ttl: :infinity

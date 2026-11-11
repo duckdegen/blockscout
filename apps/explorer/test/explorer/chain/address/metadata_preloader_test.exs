@@ -2,6 +2,9 @@
 defmodule Explorer.Chain.Address.MetadataPreloaderTest do
   use ExUnit.Case, async: false
 
+  import Explorer.Chain.GNSCase
+  import Mox
+
   alias Explorer.Chain
   alias Explorer.Chain.Address
   alias Explorer.Chain.Address.MetadataPreloader
@@ -9,7 +12,9 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
   alias Plug.Conn
 
   @address_hash_string "0x000000000000000000000000000000000000000a"
+  @other_address_hash_string "0x000000000000000000000000000000000000000b"
   @ens_name "test.eth"
+  @gwei_name "test.gwei"
   @metadata_tag %{"name" => "Test", "tagType" => "name", "meta" => %{}}
 
   setup do
@@ -151,6 +156,117 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
     end
   end
 
+  describe "with GNS enabled" do
+    setup :verify_on_exit!
+    setup :set_mox_global
+
+    setup do
+      enable_gns()
+    end
+
+    test "preloads .gwei names without BENS" do
+      Application.put_env(:explorer, BENS, Keyword.put(Application.get_env(:explorer, BENS), :enabled, false))
+      expect_name_nft([%{name: @gwei_name, address_hash: @address_hash_string}])
+
+      # the metadata microservice is not requested for this field
+      address = MetadataPreloader.maybe_preload_selected_meta(address(), [:ens_domain_name])
+
+      assert address.ens_domain_name == @gwei_name
+    end
+
+    test "preloads .gwei names through the BENS preload helpers" do
+      Application.put_env(:explorer, BENS, Keyword.put(Application.get_env(:explorer, BENS), :enabled, false))
+      expect_name_nft([%{name: @gwei_name, address_hash: @address_hash_string}], 2)
+
+      assert %Address{ens_domain_name: @gwei_name} = BENS.maybe_preload_ens_to_address(address())
+      assert [%Address{ens_domain_name: @gwei_name}] = BENS.maybe_preload_ens([address()])
+    end
+
+    test "keeps the name BENS returned for an address named by both", %{bypass: bypass} do
+      expect_both_microservices(bypass)
+
+      expect_name_nft([
+        %{name: @gwei_name, address_hash: @address_hash_string},
+        %{name: "other.gwei", address_hash: @other_address_hash_string}
+      ])
+
+      [address, other_address] =
+        MetadataPreloader.maybe_preload_ens_and_metadata([address(), address(@other_address_hash_string)])
+
+      assert address.ens_domain_name == @ens_name
+      assert address.metadata == %{"tags" => [@metadata_tag]}
+      # BENS has no name for this one
+      assert other_address.ens_domain_name == "other.gwei"
+    end
+
+    test "preloads ENS names when the GNS request fails", %{bypass: bypass} do
+      expect_both_microservices(bypass)
+      expect(EthereumJSONRPC.Mox, :json_rpc, fn _requests, _options -> {:error, :econnrefused} end)
+
+      [address] = MetadataPreloader.maybe_preload_ens_and_metadata([address()])
+
+      assert address.ens_domain_name == @ens_name
+    end
+
+    test "preloads .gwei names when BENS fails", %{bypass: bypass} do
+      Bypass.expect(bypass, fn conn -> Conn.resp(conn, 500, "") end)
+      expect_name_nft([%{name: @gwei_name, address_hash: @address_hash_string}])
+
+      [address] = MetadataPreloader.maybe_preload_ens_and_metadata([address()])
+
+      assert address.ens_domain_name == @gwei_name
+    end
+
+    test "does not request .gwei names when the ENS preload is disabled for the entity kind", %{bypass: bypass} do
+      Application.put_env(
+        :explorer,
+        BENS,
+        Keyword.put(Application.get_env(:explorer, BENS), :disable_transactions_bens_preload, true)
+      )
+
+      # a request to the node would fail the test, since nothing is expected
+      expect_only(bypass, "/api/v1/metadata")
+
+      [address] = MetadataPreloader.maybe_preload_ens_and_metadata([address()], :transactions)
+
+      assert address.ens_domain_name == nil
+    end
+  end
+
+  describe "maybe_preload_ens_info_to_search_results/1" do
+    setup :verify_on_exit!
+    setup :set_mox_global
+
+    setup do
+      Application.put_env(:explorer, BENS, Keyword.put(Application.get_env(:explorer, BENS), :enabled, false))
+
+      :ok
+    end
+
+    test "returns the results as they are without a name service" do
+      results = [%{type: "address", address_hash: checksummed_address_hash()}]
+
+      assert MetadataPreloader.maybe_preload_ens_info_to_search_results(results) == results
+    end
+
+    test "puts the .gwei name of an address to its search result" do
+      enable_gns()
+      expect_name_nft([%{name: @gwei_name, address_hash: @address_hash_string}], 2)
+
+      results = [
+        %{type: "address", address_hash: checksummed_address_hash()},
+        %{type: "token", address_hash: checksummed_address_hash()}
+      ]
+
+      assert [%{type: "address", ens_info: ens_info}, %{type: "token"} = token] =
+               MetadataPreloader.maybe_preload_ens_info_to_search_results(results)
+
+      assert %{name: @gwei_name, names_count: 1, protocol_dapp_url: "https://gwei.domains/"} = ens_info
+      assert ens_info.address_hash == checksummed_address_hash()
+      refute Map.has_key?(token, :ens_info)
+    end
+  end
+
   describe "the :timeout option" do
     setup do
       # Accepts connections, but never answers them
@@ -194,8 +310,8 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
     {System.monotonic_time(:millisecond) - started_at, result}
   end
 
-  defp address do
-    {:ok, hash} = Chain.string_to_address_hash(@address_hash_string)
+  defp address(address_hash_string \\ @address_hash_string) do
+    {:ok, hash} = Chain.string_to_address_hash(address_hash_string)
     %Address{hash: hash}
   end
 

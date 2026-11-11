@@ -891,8 +891,9 @@ defmodule BlockScoutWeb.Chain do
     end
   end
 
+  # `.gwei` names are resolved by GNS, the rest of the domains by BENS
   defp search_ens_domain(search_query) do
-    case Search.search_ens_name_in_bens(search_query) do
+    case Search.search_ens_name_in_gns(search_query) || Search.search_ens_name_in_bens(search_query) do
       nil ->
         {:error, :not_found}
 

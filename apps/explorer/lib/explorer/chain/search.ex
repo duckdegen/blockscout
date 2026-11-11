@@ -23,6 +23,7 @@ defmodule Explorer.Chain.Search do
     Beacon.Blob,
     Block,
     DenormalizationHelper,
+    GNS,
     Hash,
     SmartContract,
     Token,
@@ -979,22 +980,39 @@ defmodule Explorer.Chain.Search do
   end
 
   defp search_ens_name(search_query, options) do
-    case search_ens_name_in_bens(search_query) do
+    search_query
+    |> search_domain_names()
+    |> Enum.map(fn
       {ens_result, nil} ->
-        [
-          merge_address_search_result_with_ens_info(nil, ens_result)
-        ]
+        merge_address_search_result_with_ens_info(nil, ens_result)
 
       {ens_result, address_hash} ->
-        [
-          address_hash
-          |> search_address_by_address_hash_query()
-          |> select_repo(options).all()
-          |> merge_address_search_result_with_ens_info(ens_result)
-        ]
+        address_hash
+        |> search_address_by_address_hash_query()
+        |> select_repo(options).all()
+        |> merge_address_search_result_with_ens_info(ens_result)
+    end)
+  end
 
-      _ ->
-        []
+  # Resolves the query in the name services: in BENS and, for `.gwei` names, in
+  # GNS. A single label is looked up in both, so the query "alice" finds
+  # "alice.gwei" the same way BENS finds "alice.eth" for it.
+  defp search_domain_names(search_query) do
+    gns_task =
+      if GNS.enabled?(), do: Task.async(fn -> search_ens_name_in_gns(search_query, allow_bare_label?: true) end)
+
+    bens_result = search_ens_name_in_bens(search_query)
+    gns_result = gns_task && await_gns_task(gns_task)
+
+    [bens_result, gns_result]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(fn {%{name: name}, _address_hash} -> name end)
+  end
+
+  defp await_gns_task(task) do
+    case Task.yield(task, 5000) || Task.shutdown(task) do
+      {:ok, result} -> result
+      _ -> nil
     end
   end
 
@@ -1070,6 +1088,26 @@ defmodule Explorer.Chain.Search do
          %{address_hash: address_hash_string_or_nil} = result <- ens_domain_name_lookup(trimmed_query),
          address_hash <- address_hash_string_or_nil && Chain.string_to_address_hash_or_nil(address_hash_string_or_nil) do
       {result, address_hash}
+    else
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Try to resolve a `.gwei` domain via GNS.
+
+  Returns the result in the format of `search_ens_name_in_bens/1`. The query
+  has to end with `.gwei`, unless the `:allow_bare_label?` option is set, see
+  `t:Explorer.Chain.GNS.Name.option/0`.
+  """
+  @spec search_ens_name_in_gns(binary(), [GNS.Name.option()]) :: nil | {GNS.domain_info(), Hash.Address.t() | nil}
+  def search_ens_name_in_gns(search_query, options \\ []) do
+    trimmed_query = String.trim(search_query)
+
+    with true <- String.length(trimmed_query) >= @min_query_length,
+         %{address_hash: address_hash_string} = result <- GNS.lookup_name(trimmed_query, options) do
+      {result, Chain.string_to_address_hash_or_nil(address_hash_string)}
     else
       _ ->
         nil

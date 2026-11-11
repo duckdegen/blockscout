@@ -14,8 +14,6 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
 
   require Logger
 
-  import Explorer.Chain.Address.MetadataPreloader, only: [maybe_preload_meta: 3]
-
   # The batch resolve is only used to decorate API responses with ENS names, so
   # it is kept short on purpose: a slow BENS should cost the response its names,
   # not its latency. A longer timeout also keeps a pooled connection held for
@@ -305,43 +303,47 @@ defmodule Explorer.MicroserviceInterfaces.BENS do
   defp parse_get_address_response(_), do: nil
 
   @doc """
-  Preloads ENS data to the list if BENS is enabled
+  Preloads domain names to the list if a name service is enabled.
+
+  Besides the ENS names served by BENS, these are the `.gwei` names of the Gwei
+  Name Service, see `Explorer.Chain.GNS`. The same goes for the other
+  `maybe_preload_ens_*` functions.
   """
   @spec maybe_preload_ens(MetadataPreloader.supported_input()) :: MetadataPreloader.supported_input()
   def maybe_preload_ens(argument) do
-    maybe_preload_meta(argument, __MODULE__, &MetadataPreloader.preload_ens_to_list/1)
+    MetadataPreloader.maybe_preload_selected_meta(argument, [:ens_domain_name])
   end
 
   @doc """
-  Preloads ENS data to the list of the search results if BENS is enabled
+  Preloads ENS data to the list of the search results if a name service is enabled
   """
   @spec maybe_preload_ens_info_to_search_results(list()) :: list()
   def maybe_preload_ens_info_to_search_results(list) do
-    maybe_preload_meta(list, __MODULE__, &MetadataPreloader.preload_ens_info_to_search_results/1)
+    MetadataPreloader.maybe_preload_ens_info_to_search_results(list)
   end
 
   @doc """
-  Preloads ENS data to the transaction results if BENS is enabled
+  Preloads ENS data to the transaction results if a name service is enabled
   """
   @spec maybe_preload_ens_to_transaction(Transaction.t()) :: Transaction.t()
   def maybe_preload_ens_to_transaction(transaction) do
-    maybe_preload_meta(transaction, __MODULE__, &MetadataPreloader.preload_ens_to_transaction/1)
+    maybe_preload_ens(transaction)
   end
 
   @doc """
-  Preloads ENS data to the address results if BENS is enabled
+  Preloads ENS data to the address results if a name service is enabled
   """
   @spec maybe_preload_ens_to_address(Address.t()) :: Address.t()
   def maybe_preload_ens_to_address(address) do
-    maybe_preload_meta(address, __MODULE__, &MetadataPreloader.preload_ens_to_address/1)
+    maybe_preload_ens(address)
   end
 
   @doc """
-  Preloads ENS data to the NFT instance if BENS is enabled
+  Preloads ENS data to the NFT instance if a name service is enabled
   """
   @spec maybe_preload_ens_to_instance(Instance.t()) :: Instance.t()
   def maybe_preload_ens_to_instance(instance) do
-    maybe_preload_meta(instance, __MODULE__, &MetadataPreloader.preload_ens_to_instance/1)
+    maybe_preload_ens(instance)
   end
 
   @doc """

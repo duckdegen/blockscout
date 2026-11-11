@@ -2,6 +2,11 @@
 defmodule Explorer.Chain.Address.MetadataPreloader do
   @moduledoc """
   Module responsible for preloading metadata (from BENS, Metadata microservices) to addresses.
+
+  Domain names come from two sources that write to the same `ens_domain_name`
+  field: the BENS microservice and, for `.gwei` names, the Gwei Name Service
+  contract (see `Explorer.Chain.GNS`). An address named by both keeps the name
+  BENS returned for it.
   """
   alias Ecto.Association.NotLoaded
   alias Explorer.MicroserviceInterfaces.{BENS, Metadata}
@@ -12,6 +17,7 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
     AdvancedFilter,
     Beacon.Deposit,
     Block,
+    GNS,
     InternalTransaction,
     Log,
     Token.Instance,
@@ -43,8 +49,8 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   @type entity_kind :: :any | :blocks | :token_transfers | :transactions
 
   @typedoc """
-  Field a microservice preload writes to: `:ens_domain_name` is served by BENS,
-  `:metadata` by the Metadata microservice.
+  Field a microservice preload writes to: `:ens_domain_name` is served by BENS
+  and GNS, `:metadata` by the Metadata microservice.
   """
   @type meta_field :: :ens_domain_name | :metadata
 
@@ -61,23 +67,24 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
 
   @all_meta_fields [:ens_domain_name, :metadata]
 
-  # Backstop for the concurrent microservice requests. Both BENS and Metadata
-  # enforce their own receive timeout, so this only fires if a request hangs
-  # outside of it.
+  # Backstop for the concurrent microservice requests. BENS, GNS and Metadata
+  # enforce their own timeout, so this only fires if a request hangs outside of
+  # it.
   @concurrent_preload_timeout :timer.seconds(10)
 
   @doc """
   Preloads ENS names and metadata to supported entities, querying the BENS and
-  Metadata microservices concurrently.
+  Metadata microservices and the GNS contract concurrently.
 
-  Both microservices are asked about the same set of address hashes, so their
-  requests are independent and there is nothing to gain from issuing them one
-  after another: sequentially the entity waits for the sum of both round trips,
-  concurrently only for the slower one.
+  All of them are asked about the same set of address hashes, so their requests
+  are independent and there is nothing to gain from issuing them one after
+  another: sequentially the entity waits for the sum of the round trips,
+  concurrently only for the slowest one.
 
   `entity_kind` selects the `DISABLE_*_BENS_PRELOAD` flag that applies to the
-  input. The metadata preload is not flag-gated. See `t:preload_option/0` for
-  the `options`.
+  input. The flag turns off the whole domain name preload, `.gwei` names
+  included. The metadata preload is not flag-gated. See `t:preload_option/0`
+  for the `options`.
   """
   @spec maybe_preload_ens_and_metadata(supported_input(), entity_kind(), [preload_option()]) :: supported_input()
   def maybe_preload_ens_and_metadata(input, entity_kind \\ :any, options \\ []) do
@@ -148,19 +155,11 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   end
 
   @doc """
-  Preloads ENS names to list of supported entities
+  Preloads ENS and `.gwei` names to list of supported entities
   """
   @spec preload_ens_to_list([supported_types]) :: [supported_types]
   def preload_ens_to_list(items) do
-    address_hash_strings = address_hash_strings(items)
-
-    case BENS.ens_names_batch_request(address_hash_strings) do
-      {:ok, result} ->
-        put_ens_names(result["names"], items)
-
-      _ ->
-        items
-    end
+    preload_selected_meta(items, [:ens_domain_name], [])
   end
 
   @doc """
@@ -207,7 +206,20 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   end
 
   @doc """
-    Preload ENS info to search result, using get_address/1
+  Preloads ENS info to the address search results if BENS or GNS is enabled
+  """
+  @spec maybe_preload_ens_info_to_search_results(list) :: list
+  def maybe_preload_ens_info_to_search_results(list) do
+    if BENS.enabled?() or GNS.enabled?() do
+      preload_ens_info_to_search_results(list)
+    else
+      list
+    end
+  end
+
+  @doc """
+    Preload ENS info to search result, using `BENS.get_address/1` and, for the
+    addresses BENS has no domain for, `GNS.address_domain/1`
   """
   @spec preload_ens_info_to_search_results(list) :: list
   def preload_ens_info_to_search_results(list) do
@@ -216,7 +228,8 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
         search_result
 
       %{type: "address"} = search_result ->
-        ens_info = search_result[:address_hash] |> BENS.get_address()
+        address_hash = search_result[:address_hash]
+        ens_info = BENS.get_address(address_hash) || GNS.address_domain(address_hash)
         Map.put(search_result, :ens_info, ens_info)
 
       search_result ->
@@ -233,6 +246,7 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
         address_hash_strings
         |> meta_fetchers(fields)
         |> fetch_meta(options[:timeout])
+        |> merge_meta_by_field()
         |> Enum.reduce(items, fn {field, meta}, acc -> put_meta_to_items(acc, meta, field) end)
     end
   end
@@ -244,12 +258,16 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
     |> Enum.uniq()
   end
 
+  # The fetchers of a field are listed by precedence: where several of them
+  # answer for the same address, the answer of the first one is kept.
   defp meta_fetchers(address_hash_strings, fields) do
     [
       {:ens_domain_name, BENS.enabled?(), fn -> ens_names(address_hash_strings) end},
+      {:ens_domain_name, GNS.enabled?(), fn -> GNS.primary_names(address_hash_strings) end},
       {:metadata, Metadata.enabled?(), fn -> metadata_tags(address_hash_strings) end}
     ]
-    |> Enum.filter(fn {field, enabled?, _fetcher} -> enabled? and field in fields end)
+    |> Enum.with_index(fn {field, enabled?, fetcher}, precedence -> {field, precedence, enabled?, fetcher} end)
+    |> Enum.filter(fn {field, _precedence, enabled?, _fetcher} -> enabled? and field in fields end)
   end
 
   defp fetch_meta([], _timeout), do: []
@@ -257,25 +275,36 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   # A single request needs no task unless it has a timeout to keep: running it
   # in the caller keeps the logger metadata and the stacktrace of the calling
   # process.
-  defp fetch_meta([{field, _enabled?, fetcher}], nil), do: fetched_meta(field, fetcher.())
+  defp fetch_meta([{field, precedence, _enabled?, fetcher}], nil), do: fetched_meta(field, precedence, fetcher.())
 
   defp fetch_meta(fetchers, timeout) do
     Explorer.TaskSupervisor
     |> Task.Supervisor.async_stream_nolink(
       fetchers,
-      fn {field, _enabled?, fetcher} -> {field, fetcher.()} end,
+      fn {field, precedence, _enabled?, fetcher} -> {field, precedence, fetcher.()} end,
       timeout: timeout || @concurrent_preload_timeout,
       on_timeout: :kill_task,
       ordered: false
     )
     |> Enum.flat_map(fn
-      {:ok, {field, result}} -> fetched_meta(field, result)
+      {:ok, {field, precedence, result}} -> fetched_meta(field, precedence, result)
       _other -> []
     end)
   end
 
-  defp fetched_meta(field, {:ok, meta}), do: [{field, meta || %{}}]
-  defp fetched_meta(_field, _error), do: []
+  defp fetched_meta(field, precedence, {:ok, meta}), do: [{field, precedence, meta || %{}}]
+  defp fetched_meta(_field, _precedence, _error), do: []
+
+  # Collapses what the fetchers returned to a single map per field. The maps
+  # are merged starting from the fetcher with the lowest precedence, so that
+  # the entries of the ones listed first win.
+  defp merge_meta_by_field(fetched) do
+    fetched
+    |> Enum.sort_by(fn {_field, precedence, _meta} -> precedence end, :desc)
+    |> Enum.reduce(%{}, fn {field, _precedence, meta}, acc ->
+      Map.update(acc, field, meta, &Map.merge(&1, meta))
+    end)
+  end
 
   defp ens_names(address_hash_strings) do
     case BENS.ens_names_batch_request(address_hash_strings) do
@@ -378,10 +407,6 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
 
   defp item_to_address_hash_strings(%HotSmartContracts{contract_address_hash: contract_address_hash}) do
     [to_string(contract_address_hash)]
-  end
-
-  defp put_ens_names(names, items) do
-    Enum.map(items, &put_meta_to_item(&1, names, :ens_domain_name))
   end
 
   defp put_metadata(names, items) do
