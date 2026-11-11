@@ -275,9 +275,10 @@ defmodule Explorer.Chain.GNS do
     :ok
   end
 
-  defp cache_enabled?, do: !!config()[:cache_enabled]
+  # A zero `GNS_CACHE_TTL` turns the cache off
+  defp cache_enabled?, do: !!config()[:cache_enabled] and cache_ttl() > 0
 
-  defp cache_ttl, do: config()[:cache_ttl]
+  defp cache_ttl, do: config()[:cache_ttl] || 0
 
   defp contract_address_hash do
     case config()[:contract_address_hash] do
