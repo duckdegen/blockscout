@@ -182,7 +182,7 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
       assert [%Address{ens_domain_name: @gwei_name}] = BENS.maybe_preload_ens([address()])
     end
 
-    test "prefers the .gwei name of an address named by both", %{bypass: bypass} do
+    test "prefers the .gwei name of an address named by both by default", %{bypass: bypass} do
       Bypass.expect(bypass, fn conn ->
         case conn.request_path do
           "/api/v1/1/addresses:batch_resolve_names" ->
@@ -209,8 +209,8 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
       assert other_address.ens_domain_name == "other.eth"
     end
 
-    test "keeps the name BENS returned for an address named by both when BENS is preferred", %{bypass: bypass} do
-      enable_gns(prefer_over_bens: false)
+    test "prefers the name BENS returned for an address named by both when ENS comes first", %{bypass: bypass} do
+      set_domain_name_services_order([:ens, :gwei])
       expect_both_microservices(bypass)
 
       expect_name_nft([

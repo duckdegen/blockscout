@@ -1005,9 +1005,10 @@ defmodule Explorer.Chain.Search do
     bens_result = search_ens_name_in_bens(search_query)
     gns_result = gns_task && await_gns_task(gns_task)
 
-    results = if GNS.preferred_over_bens?(), do: [gns_result, bens_result], else: [bens_result, gns_result]
+    results = %{ens: bens_result, gwei: gns_result}
 
-    results
+    Address.MetadataPreloader.domain_name_services_order()
+    |> Enum.map(&results[&1])
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq_by(fn {%{name: name}, _address_hash} -> name end)
   end

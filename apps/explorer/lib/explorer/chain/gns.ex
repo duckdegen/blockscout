@@ -25,9 +25,10 @@ defmodule Explorer.Chain.GNS do
   ## Precedence
 
   An address can have both a `.gwei` name and a name served by BENS, while the
-  API has a single name per address. `GNS_PREFER_OVER_BENS` decides which one
-  is shown: the `.gwei` name by default, the BENS one when it is set to
-  `false`. See `preferred_over_bens?/0`.
+  API has a single name per address. `DOMAIN_NAME_SERVICES_ORDER` decides
+  which one is shown: with `GWEI,ENS`, the default, the `.gwei` name, with
+  `ENS,GWEI` the BENS one. See
+  `Explorer.Chain.Address.MetadataPreloader.domain_name_services_order/0`.
 
   ## Cache
 
@@ -85,13 +86,6 @@ defmodule Explorer.Chain.GNS do
   """
   @spec enabled?() :: boolean()
   def enabled?, do: !!config()[:enabled] and not is_nil(contract_address_hash())
-
-  @doc """
-  Returns `true` if a `.gwei` name takes precedence over a name BENS returns
-  for the same address or the same search query.
-  """
-  @spec preferred_over_bens?() :: boolean()
-  def preferred_over_bens?, do: Keyword.get(config(), :prefer_over_bens, true)
 
   @doc """
   Returns the primary `.gwei` names of the given addresses.

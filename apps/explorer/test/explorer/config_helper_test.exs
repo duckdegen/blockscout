@@ -41,6 +41,43 @@ defmodule ConfigHelperTest do
     end
   end
 
+  describe "parse_domain_name_services_order/2" do
+    @env_var "DOMAIN_NAME_SERVICES_ORDER"
+
+    test "uses the default when the variable is not set" do
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS") == [:gwei, :ens]
+    end
+
+    test "parses a comma-separated list in any letter case" do
+      System.put_env(@env_var, "ENS,GWEI")
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS") == [:ens, :gwei]
+
+      System.put_env(@env_var, " gwei , Ens ")
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "ENS,GWEI") == [:gwei, :ens]
+    end
+
+    test "parses a JSON array" do
+      System.put_env(@env_var, ~s(["ENS", "GWEI"]))
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS") == [:ens, :gwei]
+    end
+
+    test "appends the services missing from the list" do
+      System.put_env(@env_var, "ENS")
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS") == [:ens, :gwei]
+
+      System.put_env(@env_var, "GWEI,GWEI")
+      assert ConfigHelper.parse_domain_name_services_order(@env_var, "ENS,GWEI") == [:gwei, :ens]
+    end
+
+    test "raises on an unknown service" do
+      System.put_env(@env_var, "ENS,GWIE")
+
+      assert_raise RuntimeError, ~r/Invalid domain name service\(s\) in DOMAIN_NAME_SERVICES_ORDER: gwie/, fn ->
+        ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS")
+      end
+    end
+  end
+
   describe "parse_path_env_var/2" do
     test "common case" do
       System.put_env("NFT_MEDIA_HANDLER_BUCKET_FOLDER", "test")
@@ -95,6 +132,7 @@ defmodule ConfigHelperTest do
   end
 
   defp clear_env_variables do
+    System.delete_env("DOMAIN_NAME_SERVICES_ORDER")
     System.delete_env("ETHEREUM_JSONRPC_HTTP_URLS")
     System.delete_env("ETHEREUM_JSONRPC_HTTP_URL")
     System.delete_env("ETHEREUM_JSONRPC_TRACE_URLS")

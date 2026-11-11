@@ -5,8 +5,9 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
 
   Domain names come from two sources that write to the same `ens_domain_name`
   field: the BENS microservice and, for `.gwei` names, the Gwei Name Service
-  contract (see `Explorer.Chain.GNS`). An address named by both gets its
-  `.gwei` name, unless `GNS_PREFER_OVER_BENS` is set to `false`.
+  contract (see `Explorer.Chain.GNS`). An address named by both gets the name
+  of the service that comes first in `DOMAIN_NAME_SERVICES_ORDER`, see
+  `domain_name_services_order/0`.
   """
   alias Ecto.Association.NotLoaded
   alias Explorer.MicroserviceInterfaces.{BENS, Metadata}
@@ -65,7 +66,15 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   """
   @type preload_option :: {:timeout, non_neg_integer()}
 
+  @typedoc """
+  Domain name service: `:ens` are the names served by BENS, `:gwei` the
+  `.gwei` names served by GNS.
+  """
+  @type domain_name_service :: :ens | :gwei
+
   @all_meta_fields [:ens_domain_name, :metadata]
+
+  @default_domain_name_services_order [:gwei, :ens]
 
   # Backstop for the concurrent microservice requests. BENS, GNS and Metadata
   # enforce their own timeout, so this only fires if a request hangs outside of
@@ -94,6 +103,19 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
         else: @all_meta_fields
 
     maybe_preload_selected_meta(input, fields, options)
+  end
+
+  @doc """
+  Returns the domain name services in the order of their precedence, set with
+  `DOMAIN_NAME_SERVICES_ORDER`.
+
+  The API has a single name per address, so where more than one service has a
+  name for an address, the name of the first service is used. Search results
+  found by several services are listed in this order as well.
+  """
+  @spec domain_name_services_order() :: [domain_name_service()]
+  def domain_name_services_order do
+    Application.get_env(:explorer, :domain_name_services_order, @default_domain_name_services_order)
   end
 
   @doc """
@@ -236,11 +258,10 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   end
 
   defp address_ens_info(address_hash) do
-    if GNS.preferred_over_bens?() do
-      GNS.address_domain(address_hash) || BENS.get_address(address_hash)
-    else
-      BENS.get_address(address_hash) || GNS.address_domain(address_hash)
-    end
+    Enum.find_value(domain_name_services_order(), fn
+      :ens -> BENS.get_address(address_hash)
+      :gwei -> GNS.address_domain(address_hash)
+    end)
   end
 
   defp preload_selected_meta(items, fields, options) do
@@ -275,10 +296,10 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   end
 
   defp domain_name_fetchers(address_hash_strings) do
-    bens = {:ens_domain_name, BENS.enabled?(), fn -> ens_names(address_hash_strings) end}
-    gns = {:ens_domain_name, GNS.enabled?(), fn -> GNS.primary_names(address_hash_strings) end}
-
-    if GNS.preferred_over_bens?(), do: [gns, bens], else: [bens, gns]
+    Enum.map(domain_name_services_order(), fn
+      :ens -> {:ens_domain_name, BENS.enabled?(), fn -> ens_names(address_hash_strings) end}
+      :gwei -> {:ens_domain_name, GNS.enabled?(), fn -> GNS.primary_names(address_hash_strings) end}
+    end)
   end
 
   defp fetch_meta([], _timeout), do: []

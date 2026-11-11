@@ -803,8 +803,10 @@ config :explorer, Explorer.Chain.GNS,
   enabled: ConfigHelper.parse_bool_env_var("GNS_ENABLED"),
   contract_address_hash:
     ConfigHelper.safe_get_env("GNS_CONTRACT_ADDRESS", "0x9D51D507BC7264d4fE8Ad1cf7Fe191933A0a81d6"),
-  cache_ttl: ConfigHelper.parse_time_env_var("GNS_CACHE_TTL", "5m"),
-  prefer_over_bens: ConfigHelper.parse_bool_env_var("GNS_PREFER_OVER_BENS", "true")
+  cache_ttl: ConfigHelper.parse_time_env_var("GNS_CACHE_TTL", "5m")
+
+config :explorer,
+  domain_name_services_order: ConfigHelper.parse_domain_name_services_order("DOMAIN_NAME_SERVICES_ORDER", "GWEI,ENS")
 
 config :explorer, Explorer.MicroserviceInterfaces.AccountAbstraction,
   service_url: ConfigHelper.parse_url_env_var("MICROSERVICE_ACCOUNT_ABSTRACTION_URL"),

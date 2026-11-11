@@ -436,6 +436,43 @@ defmodule ConfigHelper do
     end
   end
 
+  # Domain name services by the name they have in the env variable, in the
+  # order the ones missing from the variable are appended in.
+  @domain_name_services [{"gwei", :gwei}, {"ens", :ens}]
+
+  @doc """
+  Parses the order of precedence of the domain name services: `ENS` stands for
+  the names served by the BENS microservice, `GWEI` for the `.gwei` names of
+  the Gwei Name Service.
+
+  The value is a list of the services, the preferred one first, written either
+  as a comma-separated list (`GWEI,ENS`) or as a JSON array (`["ENS", "GWEI"]`),
+  in any letter case. A service missing from the list goes after the listed
+  ones. Raises on an unknown service, so that a typo fails at boot instead of
+  silently changing the order.
+  """
+  @spec parse_domain_name_services_order(String.t(), String.t()) :: [:ens | :gwei]
+  def parse_domain_name_services_order(env_var, default_value) do
+    names =
+      env_var
+      |> safe_get_env(default_value)
+      |> String.replace(~r/[\[\]"'\s]/, "")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.downcase/1)
+
+    known_names = Enum.map(@domain_name_services, fn {name, _service} -> name end)
+
+    case Enum.reject(names, &(&1 in known_names)) do
+      [] ->
+        listed = names |> Enum.uniq() |> Enum.map(&(@domain_name_services |> List.keyfind(&1, 0) |> elem(1)))
+        listed ++ (Enum.map(@domain_name_services, fn {_name, service} -> service end) -- listed)
+
+      invalid ->
+        raise "Invalid domain name service(s) in #{env_var}: #{Enum.join(invalid, ", ")}. " <>
+                "Supported values are #{known_names |> Enum.map_join(", ", &String.upcase/1)}"
+    end
+  end
+
   @spec parse_url_env_var(String.t(), String.t() | nil, boolean()) :: String.t() | nil
   def parse_url_env_var(env_var, default_value \\ nil, trailing_slash_needed? \\ false) do
     with url when url != "" <- safe_get_env(env_var, default_value),

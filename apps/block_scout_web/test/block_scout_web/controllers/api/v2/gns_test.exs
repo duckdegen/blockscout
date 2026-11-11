@@ -71,8 +71,8 @@ defmodule BlockScoutWeb.API.V2.GNSTest do
       assert item["to"]["ens_domain_name"] == "bob.eth"
     end
 
-    test "the name from BENS is preferred when GNS_PREFER_OVER_BENS is false", %{conn: conn} do
-      enable_gns(prefer_over_bens: false)
+    test "the name from BENS is preferred when ENS comes first in the order", %{conn: conn} do
+      set_domain_name_services_order([:ens, :gwei])
       bypass = enable_bens()
       transaction = :transaction |> insert() |> with_block()
 
@@ -186,7 +186,7 @@ defmodule BlockScoutWeb.API.V2.GNSTest do
 
       assert conn |> get("/api/v2/search?q=alice") |> json_response(200) |> names.() == ["alice.gwei", "alice.eth"]
 
-      enable_gns(prefer_over_bens: false)
+      set_domain_name_services_order([:ens, :gwei])
 
       assert conn |> get("/api/v2/search?q=alice") |> json_response(200) |> names.() == ["alice.eth", "alice.gwei"]
     end

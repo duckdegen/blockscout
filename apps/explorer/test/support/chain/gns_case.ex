@@ -64,6 +64,24 @@ defmodule Explorer.Chain.GNSCase do
   end
 
   @doc """
+  Sets the order of precedence of the domain name services until the end of
+  the test.
+  """
+  @spec set_domain_name_services_order([:ens | :gwei]) :: :ok
+  def set_domain_name_services_order(order) do
+    old_order = Application.fetch_env(:explorer, :domain_name_services_order)
+
+    Application.put_env(:explorer, :domain_name_services_order, order)
+
+    on_exit(fn ->
+      case old_order do
+        {:ok, order} -> Application.put_env(:explorer, :domain_name_services_order, order)
+        :error -> Application.delete_env(:explorer, :domain_name_services_order)
+      end
+    end)
+  end
+
+  @doc """
   Expects `calls_count` JSON-RPC requests and answers their `eth_call`s as the
   `NameNFT` contract holding `names`.
   """
