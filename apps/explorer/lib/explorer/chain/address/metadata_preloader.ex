@@ -5,8 +5,8 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
 
   Domain names come from two sources that write to the same `ens_domain_name`
   field: the BENS microservice and, for `.gwei` names, the Gwei Name Service
-  contract (see `Explorer.Chain.GNS`). An address named by both keeps the name
-  BENS returned for it.
+  contract (see `Explorer.Chain.GNS`). An address named by both gets its
+  `.gwei` name, unless `GNS_PREFER_OVER_BENS` is set to `false`.
   """
   alias Ecto.Association.NotLoaded
   alias Explorer.MicroserviceInterfaces.{BENS, Metadata}
@@ -228,13 +228,19 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
         search_result
 
       %{type: "address"} = search_result ->
-        address_hash = search_result[:address_hash]
-        ens_info = BENS.get_address(address_hash) || GNS.address_domain(address_hash)
-        Map.put(search_result, :ens_info, ens_info)
+        Map.put(search_result, :ens_info, address_ens_info(search_result[:address_hash]))
 
       search_result ->
         search_result
     end)
+  end
+
+  defp address_ens_info(address_hash) do
+    if GNS.preferred_over_bens?() do
+      GNS.address_domain(address_hash) || BENS.get_address(address_hash)
+    else
+      BENS.get_address(address_hash) || GNS.address_domain(address_hash)
+    end
   end
 
   defp preload_selected_meta(items, fields, options) do
@@ -261,13 +267,18 @@ defmodule Explorer.Chain.Address.MetadataPreloader do
   # The fetchers of a field are listed by precedence: where several of them
   # answer for the same address, the answer of the first one is kept.
   defp meta_fetchers(address_hash_strings, fields) do
-    [
-      {:ens_domain_name, BENS.enabled?(), fn -> ens_names(address_hash_strings) end},
-      {:ens_domain_name, GNS.enabled?(), fn -> GNS.primary_names(address_hash_strings) end},
-      {:metadata, Metadata.enabled?(), fn -> metadata_tags(address_hash_strings) end}
-    ]
+    address_hash_strings
+    |> domain_name_fetchers()
+    |> Kernel.++([{:metadata, Metadata.enabled?(), fn -> metadata_tags(address_hash_strings) end}])
     |> Enum.with_index(fn {field, enabled?, fetcher}, precedence -> {field, precedence, enabled?, fetcher} end)
     |> Enum.filter(fn {field, _precedence, enabled?, _fetcher} -> enabled? and field in fields end)
+  end
+
+  defp domain_name_fetchers(address_hash_strings) do
+    bens = {:ens_domain_name, BENS.enabled?(), fn -> ens_names(address_hash_strings) end}
+    gns = {:ens_domain_name, GNS.enabled?(), fn -> GNS.primary_names(address_hash_strings) end}
+
+    if GNS.preferred_over_bens?(), do: [gns, bens], else: [bens, gns]
   end
 
   defp fetch_meta([], _timeout), do: []

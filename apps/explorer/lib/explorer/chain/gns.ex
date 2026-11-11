@@ -22,6 +22,13 @@ defmodule Explorer.Chain.GNS do
   The integration is enabled with `GNS_ENABLED` and must only be enabled on
   chains where the contract is deployed. See https://github.com/lucadonnoh/gwei-names.
 
+  ## Precedence
+
+  An address can have both a `.gwei` name and a name served by BENS, while the
+  API has a single name per address. `GNS_PREFER_OVER_BENS` decides which one
+  is shown: the `.gwei` name by default, the BENS one when it is set to
+  `false`. See `preferred_over_bens?/0`.
+
   ## Cache
 
   Each API response refers to dozens of addresses, and most of them have no
@@ -78,6 +85,13 @@ defmodule Explorer.Chain.GNS do
   """
   @spec enabled?() :: boolean()
   def enabled?, do: !!config()[:enabled] and not is_nil(contract_address_hash())
+
+  @doc """
+  Returns `true` if a `.gwei` name takes precedence over a name BENS returns
+  for the same address or the same search query.
+  """
+  @spec preferred_over_bens?() :: boolean()
+  def preferred_over_bens?, do: Keyword.get(config(), :prefer_over_bens, true)
 
   @doc """
   Returns the primary `.gwei` names of the given addresses.

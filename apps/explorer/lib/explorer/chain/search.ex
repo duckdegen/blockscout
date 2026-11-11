@@ -996,7 +996,8 @@ defmodule Explorer.Chain.Search do
 
   # Resolves the query in the name services: in BENS and, for `.gwei` names, in
   # GNS. A single label is looked up in both, so the query "alice" finds
-  # "alice.gwei" the same way BENS finds "alice.eth" for it.
+  # "alice.gwei" the same way BENS finds "alice.eth" for it. The results are
+  # ordered by the precedence of the services.
   defp search_domain_names(search_query) do
     gns_task =
       if GNS.enabled?(), do: Task.async(fn -> search_ens_name_in_gns(search_query, allow_bare_label?: true) end)
@@ -1004,7 +1005,9 @@ defmodule Explorer.Chain.Search do
     bens_result = search_ens_name_in_bens(search_query)
     gns_result = gns_task && await_gns_task(gns_task)
 
-    [bens_result, gns_result]
+    results = if GNS.preferred_over_bens?(), do: [gns_result, bens_result], else: [bens_result, gns_result]
+
+    results
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq_by(fn {%{name: name}, _address_hash} -> name end)
   end

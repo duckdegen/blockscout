@@ -182,7 +182,35 @@ defmodule Explorer.Chain.Address.MetadataPreloaderTest do
       assert [%Address{ens_domain_name: @gwei_name}] = BENS.maybe_preload_ens([address()])
     end
 
-    test "keeps the name BENS returned for an address named by both", %{bypass: bypass} do
+    test "prefers the .gwei name of an address named by both", %{bypass: bypass} do
+      Bypass.expect(bypass, fn conn ->
+        case conn.request_path do
+          "/api/v1/1/addresses:batch_resolve_names" ->
+            names = %{
+              checksummed_address_hash() => @ens_name,
+              Address.checksum(@other_address_hash_string) => "other.eth"
+            }
+
+            Conn.resp(conn, 200, Jason.encode!(%{"names" => names}))
+
+          path ->
+            Conn.resp(conn, 200, response_body(path))
+        end
+      end)
+
+      expect_name_nft([%{name: @gwei_name, address_hash: @address_hash_string}])
+
+      [address, other_address] =
+        MetadataPreloader.maybe_preload_ens_and_metadata([address(), address(@other_address_hash_string)])
+
+      assert address.ens_domain_name == @gwei_name
+      assert address.metadata == %{"tags" => [@metadata_tag]}
+      # GNS has no name for this one
+      assert other_address.ens_domain_name == "other.eth"
+    end
+
+    test "keeps the name BENS returned for an address named by both when BENS is preferred", %{bypass: bypass} do
+      enable_gns(prefer_over_bens: false)
       expect_both_microservices(bypass)
 
       expect_name_nft([

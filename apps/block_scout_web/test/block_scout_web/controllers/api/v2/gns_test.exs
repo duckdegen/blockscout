@@ -53,39 +53,36 @@ defmodule BlockScoutWeb.API.V2.GNSTest do
       assert item["to"]["ens_domain_name"] == "sub.bob.gwei"
     end
 
-    test "the name BENS returned for an address is kept", %{conn: conn} do
-      bypass = Bypass.open()
-      bens_env = Application.get_env(:explorer, BENS, [])
-      chain_id = Application.get_env(:block_scout_web, :chain_id)
-
-      Application.put_env(:block_scout_web, :chain_id, 1)
-
-      Application.put_env(
-        :explorer,
-        BENS,
-        Keyword.merge(bens_env, service_url: "http://localhost:#{bypass.port}", enabled: true, protocols: [])
-      )
-
-      on_exit(fn ->
-        Bypass.down(bypass)
-        Application.put_env(:explorer, BENS, bens_env)
-        Application.put_env(:block_scout_web, :chain_id, chain_id)
-      end)
-
+    test "the .gwei name is preferred for an address BENS has a name for as well", %{conn: conn} do
+      bypass = enable_bens()
       transaction = :transaction |> insert() |> with_block()
 
+      # the sender has both names, the recipient only the one from BENS
+      stub_name_nft([%{name: "alice.gwei", address_hash: transaction.from_address_hash}])
+
+      expect_bens_names(bypass, %{
+        Address.checksum(transaction.from_address_hash) => "alice.eth",
+        Address.checksum(transaction.to_address_hash) => "bob.eth"
+      })
+
+      assert %{"items" => [item]} = conn |> get("/api/v2/transactions") |> json_response(200)
+
+      assert item["from"]["ens_domain_name"] == "alice.gwei"
+      assert item["to"]["ens_domain_name"] == "bob.eth"
+    end
+
+    test "the name from BENS is preferred when GNS_PREFER_OVER_BENS is false", %{conn: conn} do
+      enable_gns(prefer_over_bens: false)
+      bypass = enable_bens()
+      transaction = :transaction |> insert() |> with_block()
+
+      # the sender has both names, the recipient only the .gwei one
       stub_name_nft([
         %{name: "alice.gwei", address_hash: transaction.from_address_hash},
         %{name: "bob.gwei", address_hash: transaction.to_address_hash}
       ])
 
-      Bypass.expect(bypass, "POST", "/api/v1/1/addresses:batch_resolve_names", fn conn ->
-        Plug.Conn.resp(
-          conn,
-          200,
-          Jason.encode!(%{"names" => %{Address.checksum(transaction.from_address_hash) => "alice.eth"}})
-        )
-      end)
+      expect_bens_names(bypass, %{Address.checksum(transaction.from_address_hash) => "alice.eth"})
 
       assert %{"items" => [item]} = conn |> get("/api/v2/transactions") |> json_response(200)
 
@@ -159,6 +156,41 @@ defmodule BlockScoutWeb.API.V2.GNSTest do
       assert item["ens_info"]["name"] == "alice.gwei"
     end
 
+    test "lists the names of both services for a label, the preferred one first", %{conn: conn} do
+      bypass = enable_bens()
+      address = insert(:address)
+      ens_address = insert(:address)
+      stub_name_nft([%{name: "alice.gwei", address_hash: address.hash}])
+
+      Bypass.expect(bypass, "GET", "/api/v1/1/domains%3Alookup", fn conn ->
+        assert conn.params["name"] == "alice"
+
+        Plug.Conn.resp(
+          conn,
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "name" => "alice.eth",
+                "expiry_date" => nil,
+                "resolved_address" => %{"hash" => to_string(ens_address.hash)},
+                "protocol" => %{"id" => "ens", "short_name" => "ENS", "title" => "Ethereum Name Service"}
+              }
+            ],
+            "next_page_params" => nil
+          })
+        )
+      end)
+
+      names = fn response -> Enum.map(response["items"], & &1["ens_info"]["name"]) end
+
+      assert conn |> get("/api/v2/search?q=alice") |> json_response(200) |> names.() == ["alice.gwei", "alice.eth"]
+
+      enable_gns(prefer_over_bens: false)
+
+      assert conn |> get("/api/v2/search?q=alice") |> json_response(200) |> names.() == ["alice.eth", "alice.gwei"]
+    end
+
     test "finds nothing for a name that is not registered", %{conn: conn} do
       stub_name_nft([])
 
@@ -223,5 +255,33 @@ defmodule BlockScoutWeb.API.V2.GNSTest do
                "parameter" => nil
              }
     end
+  end
+
+  defp enable_bens do
+    bypass = Bypass.open()
+    bens_env = Application.get_env(:explorer, BENS, [])
+    chain_id = Application.get_env(:block_scout_web, :chain_id)
+
+    Application.put_env(:block_scout_web, :chain_id, 1)
+
+    Application.put_env(
+      :explorer,
+      BENS,
+      Keyword.merge(bens_env, service_url: "http://localhost:#{bypass.port}", enabled: true, protocols: [])
+    )
+
+    on_exit(fn ->
+      Bypass.down(bypass)
+      Application.put_env(:explorer, BENS, bens_env)
+      Application.put_env(:block_scout_web, :chain_id, chain_id)
+    end)
+
+    bypass
+  end
+
+  defp expect_bens_names(bypass, names) do
+    Bypass.expect(bypass, "POST", "/api/v1/1/addresses:batch_resolve_names", fn conn ->
+      Plug.Conn.resp(conn, 200, Jason.encode!(%{"names" => names}))
+    end)
   end
 end
