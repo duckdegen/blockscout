@@ -70,9 +70,9 @@ defmodule ConfigHelperTest do
     end
 
     test "raises on an unknown service" do
-      System.put_env(@env_var, "ENS,GWIE")
+      System.put_env(@env_var, "ENS,DNS")
 
-      assert_raise RuntimeError, ~r/Invalid domain name service\(s\) in DOMAIN_NAME_SERVICES_ORDER: gwie/, fn ->
+      assert_raise RuntimeError, ~r/Invalid domain name service\(s\) in DOMAIN_NAME_SERVICES_ORDER: dns/, fn ->
         ConfigHelper.parse_domain_name_services_order(@env_var, "GWEI,ENS")
       end
     end
